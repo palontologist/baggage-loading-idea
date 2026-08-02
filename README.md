@@ -34,3 +34,6 @@ python submit/agent.py
 - ✅ Type checking with mypy
 - ✅ Safety contract: input validation and sanitization before Rust binary calls
 - ✅ Rate limiting: 0.5s cooldown between Rust binary calls
+- ✅ Type checking with mypy
+- ✅ Safety contract: input validation and sanitization before Rust binary calls
+- ✅ Rate limiting: 0.5s cooldown between Rust binary calls

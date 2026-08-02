@@ -5,4 +5,4 @@ target/
 .pytest_cache/
 .DS_Store
 EOF
-echo "=== Making binary executable ===" && if [ -f ../baggage-loading-idea/submit/rust_brain ]; then cp ../baggage-loading-idea/submit/rust_brain . && chmod +x rust_brain; fi && echo "=== Initial commit ===" && git add . && git commit -m "feat: baggage loading challenge submission - hybrid Python/Rust agent" 2>&1
+echo "=== Making binary executable ===" && if [ -f ../baggage-loading-idea/submit/rust_brain ]; then cp ../baggage-loading-idea/submit/rust_brain . && chmod +x rust_brain; fi && echo "=== Initial commit ===" && git add . && git commit -m "feat: baggage loading challenge submission - hybrid Python/Rust agent" 2>&1target/
