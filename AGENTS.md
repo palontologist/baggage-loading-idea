@@ -3,7 +3,7 @@
 ## Quick Push
 
 ```bash
-cd /home/palontologist/Downloads/dev/baggage-loading-idea
+cd /home/palontologist/Downloads/dev/baggage-loading-idea-clean
 git add submit.zip AGENTS.md
 git commit -m "feat: create submission.zip for SIGNA81211"
 git push origin main
@@ -14,16 +14,33 @@ git push origin main
 - `agent.py`: Hybrid Python + Rust agent with fallback logic
 - `rust_brain_wrapper.sh`: Executable wrapper for Rust binary
 - `rust_brain`: Compiled Rust binary (included for compatibility)
-- `requirements.txt`: Python dependencies
+- `requirements.txt`: Python dependencies (numpy >= 1.20)
+- `mypy.ini`: Type checking configuration
+- `pyproject.toml`: Build and lint configuration
+- `CLAUDE.md`: Agent instructions for this subtree
+- `app/react-native/AGENTS.md`: Agent instructions for the React Native mobile client subtree
+- `app/react-native/CLAUDE.md`: Agent guidance for the React Native mobile client subtree
 
-## Testing (Optional)
+## Security & Safety
 
-Run the simulator locally (if you have dependencies installed):
+- All data sent to the Rust binary passes through `_sanitize_request()` and item/container validation (`_validate_item`, `_validate_container`) before being written to stdin
+- A rate limiter enforces a 0.5s cooldown between Rust binary calls to prevent backend abuse
+
+## Testing
+
+Run type checking:
+
+```bash
+cd submit
+mypy agent.py --config-file mypy.ini
+```
+
+Run the simulator locally (if dependencies are installed):
 
 ```bash
 cd simulator/simulator
 python scripts/run_test.py \
-  --module-path ../baggage-loading-idea/submit \
+  --module-path ../baggage-loading-idea-clean/submit \
   --config-path configs/sample_config.json
 ```
 
