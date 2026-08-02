@@ -31,3 +31,6 @@ python submit/agent.py
 - ✅ Ready for submission (submit.zip)
 - ⚠️ Rust binary has GLIBC compatibility issues on some systems
 - ✅ Python fallback ensures compatibility
+- ✅ Type checking with mypy
+- ✅ Safety contract: input validation and sanitization before Rust binary calls
+- ✅ Rate limiting: 0.5s cooldown between Rust binary calls
