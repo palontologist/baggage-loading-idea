@@ -1,71 +1,93 @@
-# Agent Submission Instructions for Baggage Loading Challenge
+# Baggage Loading Challenge - SIGNATE
 
 ## Quick Push
 
 ```bash
-cd /home/palontologist/Downloads/dev/baggage-loading-idea-clean
-git add submit.zip AGENTS.md
-git commit -m "feat: create submission.zip for SIGNA81211"
+cd /home/palontologist/Downloads/dev/baggage-loading-idea
+python -c "import zipfile; z=zipfile.ZipFile('submit.zip','w',zipfile.ZIP_DEFLATED); z.write('submit/agent.py','agent.py'); z.close()"
+git add submit/agent.py submit.zip AGENTS.md
+git commit -m "feat: rewrite agent around the simulator's own placement rules"
 git push origin main
 ```
 
-## Files Included
+## Files
 
-- `agent.py`: Hybrid Python + Rust agent with fallback logic
-- `rust_brain_wrapper.sh`: Executable wrapper for Rust binary
-- `rust_brain`: Compiled Rust binary (included for compatibility)
-- `requirements.txt`: Python dependencies (numpy >= 1.20)
-- `mypy.ini`: Type checking configuration
-- `pyproject.toml`: Build and lint configuration
-- `CLAUDE.md`: Agent instructions for this subtree
-- `app/react-native/AGENTS.md`: Agent instructions for the React Native mobile client subtree
-- `app/react-native/CLAUDE.md`: Agent guidance for the React Native mobile client subtree
-
-## Security & Safety
-
-- All data sent to the Rust binary passes through `_sanitize_request()` and item/container validation (`_validate_item`, `_validate_container`) before being written to stdin
-- A rate limiter enforces a 0.5s cooldown between Rust binary calls to prevent backend abuse
+- `submit/agent.py` - the whole agent (pure Python + NumPy, single file)
+- `submit.zip` - what gets uploaded; contains `agent.py` at the archive root
 
 ## Testing
 
-Run type checking:
+The simulator needs its dependencies; run from `simulator/` with its venv
+active and `PYTHONPATH=.`:
 
 ```bash
-cd submit
-mypy agent.py --config-file mypy.ini
-```
-
-Run the simulator locally (if dependencies are installed):
-
-```bash
-cd simulator/simulator
-python scripts/run_test.py \
-  --module-path ../baggage-loading-idea-clean/submit \
+cd simulator && source .venv/bin/activate
+PYTHONPATH=. python -m scripts.run_test \
+  --module-path agents/submit/ \
   --config-path configs/sample_config.json
 ```
 
-## Agent Strategy
+`--module-path` is dotted relative to `simulator/`, so symlink the agent in:
+`ln -s ../../submit simulator/agents/submit`.
 
-This agent uses a **hybrid Rust + Python** approach:
+Helper scripts live in `simulator/scripts/`:
 
-1. **Rust Binary (Primary)**: When available, provides optimized placement via the pre-compiled `rust_brain` binary (scores ~2.32 on SIGNATE)
-2. **Python Fallback (Improved)**: Robust grid-based placement when Rust binary is unavailable or fails
+- `live.py` - drive the real simulator in-process, no multiprocessing. Takes
+  `BAG_CFG` (config path) and a task id. Fastest way to check a change.
+- `live_sweep.py` - same, across several parameter settings.
+- `pack_debug.py` - offline only: what the planner does, no physics.
+- `probe.py` - dumps container planes and item statistics.
+- `stuck.py` / `mismatch.py` - explain why placements are rejected.
 
-### Python Fallback improvements:
-- **Full container space utilization** — Places items across the entire X-Y area (not just back half)
-- **Multi-level stacking** — Items stacked at multiple Z levels on floor and existing items
-- **All 6 orientations tried** — Each item evaluated in all axis-aligned rotations
-- **Proper 3D AABB collision detection** — Checks overlap in all three axes
-- **Rotation-aware packed item collision** — Uses quaternion-derived bounding boxes for already-placed items
-- **Cut corner avoidance** — Triangular cut corner at back-left excluded from candidates
-- **Coordinate conversion** — World positions converted to local container coordinates
-- **Efficient grid search** — Systematic grid with early termination at floor level
+## Results (local simulator, sample_config.json)
 
-## Performance
+| task | items placed | fill_score | optimize | policy |
+| --- | --- | --- | --- | --- |
+| 000 | 68.3% | 31.15 | 43 s | 0.16 s |
+| 001 | 47.6% | 20.96 | - | 1.1 s |
 
-- **Optimization**: O(n log n) for intelligent item sorting
-- **Placement**: Greedy best-fit with stability checks
-- **Fallback**: Always available, no external dependencies
-- **Time limit safe**: Under 8 seconds per episode
+Limits are 180 s for optimize and 8-10 s for policy, so there is headroom, but
+`_OPT_BUDGET` / `_POLICY_BUDGET` in the agent keep it bounded regardless of input
+size.
 
-The agent is ready to submit to the SIGNATE platform!
+## How the agent works
+
+The important part is that it reproduces the simulator's own placement rules
+instead of approximating them, because a single rejected placement ends the whole
+episode and zeroes everything after it.
+
+1. **Geometry from the container's own planes.** Interior bounds and the
+   containment test are read off `n_vecs` / `points`, the exact planes the
+   simulator tests against. Nothing about wall thickness, buffer or the cut corner
+   is assumed. (The "cut corner" turns out to be a bottom-left chamfer, so the
+   left wall only exists above it.)
+
+2. **Height map placement.** A 2D surface map gives every resting height in one
+   sliding-max pass per orientation, so candidate positions for all items are
+   cheap. Items may bridge gaps between neighbours; the map is stamped with the
+   packing gap so the sliver of floor between two boxes still reads as being at
+   their level.
+
+3. **Only ever lay items on their smallest face.** A box stood on end seals the
+   push-in corridor in front of it for everything behind it in that row.
+
+4. **The push-in corridor is modelled exactly.** `feasible()` mirrors
+   `PlacementValidator.check_transport_path`: insertion height, the clamped
+   insertion x, the sweep from the opening to the target depth, the lateral slide,
+   and the resting pose. Any candidate that would have been rejected is never
+   offered.
+
+5. **Stability is checked geometrically.** A box has to be held by enough of its
+   underside, and that support has to sit under its middle. Without this, items
+   that merely graze a neighbour are released in mid air, fall the full height of
+   the container, fail the settle test, and end the episode.
+
+6. **Ranking**: lowest layer first, then deepest (keeps the corridor open for
+   what comes next), then the most level support, then flush against a wall or
+   neighbour, then toward the centre for a low centre of gravity. Soft items go
+   last so nothing is stacked on them; priority items are steered into priority
+   containers when one exists.
+
+7. **`optimize()` returns only an ordering.** `policy()` recomputes every
+   position from the live settled state. Replaying precomputed coordinates broke
+   as soon as anything settled a few millimetres out.
