@@ -50,6 +50,7 @@ _W_BRIDGE = 1e3
 _W_FLUSH = 1e3
 _W_MASS = 0.0      # see AGENTS.md: mass-aware ordering measured strictly worse
 _M_REF = 10.0
+_W_MCF = 0.0      # see AGENTS.md: most-constrained-first measured worse
 _W_SOFT = 1e18
 _W_PRI = 1e17
 
@@ -396,8 +397,11 @@ class Agent:
         deadline = time.time() + _POLICY_BUDGET
         for slot, item in enumerate(pool):
             move = self._best_move(item)
-            if move is not None and (best_key is None or move['key'] < best_key):
-                best, best_key = (move, slot), move['key']
+            if move is None:
+                continue
+            k = self._rank(move)
+            if best_key is None or k < best_key:
+                best, best_key = (move, slot), k
             if time.time() > deadline:
                 break
         if best is None:
@@ -427,7 +431,7 @@ class Agent:
             best = None
             for item in remaining:
                 move = self._best_move(item)
-                if move is not None and (best is None or move['key'] < best[1]['key']):
+                if move is not None and (best is None or self._rank(move) < self._rank(best[1])):
                     best = (item, move)
             if best is None or time.time() > deadline:
                 break
@@ -436,6 +440,15 @@ class Agent:
             order.append(item['index'])
             remaining = [it for it in remaining if it['index'] != item['index']]
         return order
+
+    def _rank(self, move):
+        """Ordering key for choosing which item goes down next.
+
+        The count of spots an item can occupy is already known, and an item with
+        few of them is the one that will be unplaceable later, so take it while
+        the choice is still open.
+        """
+        return move['key'] + _W_MCF / (1.0 + move.get('nfeas', 0))
 
     def _commit(self, move):
         c = self.containers[move['container_idx']]
@@ -461,6 +474,7 @@ class Agent:
         soft = bool(item.get('is_soft', False))
         pri = bool(item.get('is_prioritized', False))
         best = None
+        nfeas = 0
         starts = np.searchsorted(ci[order], np.arange(len(self.containers) + 1))
         for k, c in enumerate(self.containers):
             rows = order[starts[k]:starts[k + 1]][:_MAX_CAND]
@@ -471,11 +485,14 @@ class Agent:
             ok = c.feasible(pos, half, relax)
             if not ok.any():
                 continue
+            nfeas += int(ok.sum())
             t = rows[int(np.argmax(ok))]
             if best is None or key[t] < best['key']:
                 best = {'container_idx': k, 'pos': (float(x[t]), float(y[t]), float(z[t])),
-                        'orn': int(orn[t]), 'key': float(key[t]),
+                        'orn': int(orn[t]), 'key': float(key[t]), 'nfeas': nfeas,
                         'half': _half_ext(item, int(orn[t])), 'soft': soft, 'pri': pri}
+        if best is not None:
+            best['nfeas'] = nfeas
         return best
 
     def _candidates(self, c, item):

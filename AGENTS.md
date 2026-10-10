@@ -249,3 +249,55 @@ equally. It does mean the effective ceiling on `fill` is roughly 45-50 rather
 than the 59-65 that item volume alone suggests, since the entire ground layer
 scores zero however well it is packed. Any estimate of what is achievable here
 has to assume that cap.
+
+**One rejected placement ends the episode** (found 2026-10-10, explains most of
+the variance). `env.py:216-236` sets `terminated = True` on *any* of the three
+process checks failing - `check_inclusion`, `check_transport_path`, or
+`place_item` reporting an unsafe settle. Nothing is salvaged after that. This is
+why the platform status reads `Stopped in the middle. Did not satisfy
+{'is_placed_safe', 'is_included', 'is_valid'}`, and it is the reason a run that
+places 68% of items locally can place 50% on the platform: a single mismatch
+between `feasible()` and the validator, or one bad settle, costs everything
+downstream.
+
+It also explains why every *aggressive* idea in this file lost. The direct-entry
+slide preference, keeping cargo off soft bags, mass-aware ordering and
+most-constrained-first all buy density by accepting marginal placements, and a
+marginal placement is exactly what fails the settle test and ends the run. On a
+score that averages components, trading "one extra item if it works" for "the
+whole remainder if it does not" is a losing trade.
+
+Consequently the highest-value tuning left is not a ranking weight. It is
+`_MIN_SUPPORT` and `_CENTRE_TOL` in `_stable()`, which are the agent's only
+model of the settle test: the validator accepts 30cm of displacement and 45
+degrees (`displacement_threshold`, `angle_displacement_threshold`) and runs 300
+physics steps, while `_stable()` guesses at support fraction and centroid
+offset. Too strict and we reject placements that would have settled fine; too
+loose and we propose ones that do not. That pair, not the candidate ordering, is
+what decides how far each run gets.
+
+**Lookahead is a cliff, not a dial** (found 2026-10-10). The spec allows 3 to 40
+observable bags (`configs/robust_config.json` R5-R7 added to cover it; before
+this the suite topped out at 10). Same items, same container, `optimize` off,
+only `look_ahead` varying:
+
+| scene | look_ahead | placed | fill |
+| --- | --- | --- | --- |
+| R7 | 3 | 29.3% | 8.38 |
+| R3 | 8 | 56.1% | 25.97 |
+| R6 | 20 | **73.2%** | 30.17 |
+| R5 | 40 | 34.1% | 4.50 |
+
+A 44-point spread from lookahead alone. R5 ends at 14 items with the stack only
+0.94m high, i.e. one failed placement early. Treat any single-config number in
+this file as having that much noise on it, and prefer changes that lift the
+*worst* case rather than the mean.
+
+**Most-constrained-first ordering** (tried 2026-10-10, reverted). `_best_move`
+already computes how many spots an item can occupy and threw the count away.
+Preferring the item with the fewest is a textbook bin-packing heuristic and is
+free to evaluate. Over the lookahead cliff above it costs more than it returns:
+mean placed falls from 48.2% to 33.5%, with R3 56.1 -> 26.8 and R6 73.2 -> 43.9.
+Again a density gain bought by accepting marginal placements. The knob survives
+as `_W_MCF = 0` because the count is genuinely free and the idea may behave
+differently once the settle model is right.
