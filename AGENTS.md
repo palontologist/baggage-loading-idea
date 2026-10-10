@@ -127,3 +127,32 @@ then loses live. Two reasons:
 Cost per search node is the binding constraint: evaluating every remaining item
 costs about a second, so a beam wide enough to matter does not fit in the 180 s
 `optimize` budget.
+
+**Preferring positions that go in without a sideways slide** (tried 2026-10-10,
+reverted). Only boxes whose centre lies inside the direct-entry span avoid a
+lateral slide, and a slide seals that band for every later box at the same
+height, so preferring direct entry looks like a strong win. On the sample tasks
+it is: task 000 68.3% -> 70.7% of items, task 001 47.6% -> 52.4%. On the wider
+sweep it is a gamble, not an improvement:
+
+| config | slide=0 | slide=1e4 |
+| --- | --- | --- |
+| sample 000 | 68.3% | 70.7% |
+| sample 001 | 47.6% | 52.4% |
+| R1 | 41.5% | 39.0% |
+| R2 | 97.6% | 100.0% |
+| R3 | 56.1% | 26.8% |
+| R4 | 26.2% | 26.2% |
+| random 60 | 78.3% | 75.0% |
+| **mean** | **59.4%** | **55.7%** |
+
+It gains on the two tasks it was tuned on and collapses on R3, which is the same
+items in the same container with dimensions jittered by 10% and `optimize` off.
+Since the graded cases are unseen, a change that wins on average but has a 30
+point downside on a plausible neighbouring configuration is not worth taking.
+
+Lesson worth keeping: tune on `scripts/tune_live.py` against the physics, and
+judge on the whole suite. The planner's own score is over optimistic, because it
+evaluates positions against its model while `policy()` re-derives them from
+settled poses - at one point this change read as 25 -> 34 items offline and
+70.7% -> 70.7% live.
