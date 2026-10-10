@@ -2,30 +2,32 @@
 
 ## Architecture
 
-This agent uses a hybrid Python + Rust approach for the SIGNATE Baggage Loading optimization challenge.
+`agent.py` is the whole agent: pure Python plus NumPy, single file, no compiled
+helper and no subprocess. Everything it needs is derived from the observation
+dict the platform provides.
 
-- `agent.py`: Main agent with Rust binary primary path and Python heuristic fallback
-- `rust_brain`: Compiled Rust binary for optimized planning
-- `rust_brain_wrapper.sh`: Shell wrapper that launches the Rust binary
+## How it works
 
-## Security Boundary
+The agent reproduces the simulator's own placement rules rather than
+approximating them, because a single rejected placement ends the episode and
+zeroes everything after it. See the repository `AGENTS.md` for the full
+explanation; the short version:
 
-All data sent to the Rust binary is validated through `_sanitize_request()` and item/container validation functions (`_validate_item`, `_validate_container`) before being written to stdin. This ensures untrusted input cannot inject malformed payloads into the backend.
-
-## Cooldown Enforcement
-
-A rate limiter (`COOLDOWN_SECONDS = 0.5s`) is enforced in `_send_request()` using `time.monotonic()`. If a call arrives before the cooldown period has elapsed, the method sleeps for the remaining duration. This prevents rapid successive calls that could abuse the backend.
-
-## Fallback Behavior
-
-If the Rust binary fails to spawn or returns an invalid response, the agent falls back to a pure Python heuristic:
-- **Optimize**: Sorts items by priority (desc), mass (desc), volume (desc)
-- **Policy**: Places items at position (0.5, 0.5, 0.5) in container 0
+- Interior geometry and the containment test come from `n_vecs` / `points`, the
+  exact planes the simulator tests against.
+- `_best_moves` scores every resting spot of an item with a cheap height map,
+  then checks the survivors against a vectorised copy of
+  `PlacementValidator.check_transport_path`.
+- `_stable` requires real support under the middle of a box, because an item
+  released in mid air falls the full height of the container and fails the settle
+  test.
+- `optimize()` returns only an item ordering. `policy()` recomputes every
+  position from the live settled state.
 
 ## Dependencies
 
-- Python 3.9+
-- numpy >= 1.20
+- Python 3.10+
+- numpy >= 1.20 (uses `numpy.lib.stride_tricks.sliding_window_view`)
 
 ## Testing
 
@@ -36,8 +38,12 @@ cd submit
 mypy agent.py --config-file mypy.ini
 ```
 
-Run the agent locally (requires simulator):
+Run the agent locally (requires the simulator):
 
 ```bash
-python submit/agent.py
+cd simulator && source .venv/bin/activate
+ln -s ../../submit agents/submit
+PYTHONPATH=. python -m scripts.run_test \
+  --module-path agents/submit/ \
+  --config-path configs/sample_config.json
 ```

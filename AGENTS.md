@@ -91,3 +91,33 @@ episode and zeroes everything after it.
 7. **`optimize()` returns only an ordering.** `policy()` recomputes every
    position from the live settled state. Replaying precomputed coordinates broke
    as soon as anything settled a few millimetres out.
+
+## What was tried and did not work
+
+**Beam search over placement sequences** (tried 2026-10-09, reverted). A beam of
+partial layouts carried forward per depth, branching over both which item goes
+down next and where it goes. Measured four configurations on the sample tasks:
+
+| variant | task 000 items | task 000 fill | plan time |
+| --- | --- | --- | --- |
+| greedy | 68.3% | 31.15 | 43 s |
+| beam 2x3, plan replayed | 53.7% | 17.80 | 71 s |
+| beam 2x3, order only | 56.1% | 22.44 | 71 s |
+| beam 2x2, order only | 68.3% | 25.40 | 88 s |
+| beam 4x2, order only | 51.2% | 17.03 | 88 s |
+
+It looks better *offline* (a 2x3 beam placed 26 items versus the greedy's 25) and
+then loses live. Two reasons:
+
+- Branching over positions is worthless if `policy()` throws the positions away
+  and re-derives them, and branching over items is worthless if `_best_move` is
+  not allowed to look at every item first. Restricting the expansion to the
+  biggest items made things strictly worse than the greedy's ranking.
+- A replayed plan is brittle. The greedy recomputes each position against the
+  poses the simulator has actually settled into and so self-corrects; a plan is a
+  rigid sequence, and one item settling a few millimetres out invalidates every
+  position after it.
+
+Cost per search node is the binding constraint: evaluating every remaining item
+costs about a second, so a beam wide enough to matter does not fit in the 180 s
+`optimize` budget.
