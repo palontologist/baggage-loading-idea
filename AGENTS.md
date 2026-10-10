@@ -43,12 +43,18 @@ Helper scripts live in `simulator/scripts/`:
 
 | task | items placed | fill_score | optimize | policy |
 | --- | --- | --- | --- | --- |
-| 000 | 68.3% | 31.15 | 43 s | 0.16 s |
-| 001 | 47.6% | 20.96 | - | 1.1 s |
+| 000 | 68.3% | 31.15 | 48 s | 0.2 s |
+| 001 | 47.6% | 20.96 | - | 1.2 s |
 
-Limits are 180 s for optimize and 8-10 s for policy, so there is headroom, but
-`_OPT_BUDGET` / `_POLICY_BUDGET` in the agent keep it bounded regardless of input
-size.
+Limits are 180 s for optimize and 8-10 s for policy. `_OPT_BUDGET` (150 s) and
+`_POLICY_BUDGET` (3 s) are wall clock, so the agent returns in time whatever the
+machine speed and how large the task is; a truncated plan is still a valid
+permutation, so degradation is graceful.
+
+Check changes against `configs/robust_config.json` (R1-R4: the sample item sets
+with jittered dimensions, varied containers, lookaheads and `optimize` flags) as
+well as the sample tasks. Two tuning wins that looked good on the samples were
+reverted after the wider sweep - see below.
 
 ## How the agent works
 

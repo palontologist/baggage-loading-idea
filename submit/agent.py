@@ -44,6 +44,7 @@ _MAX_CAND = 16000
 # a pull towards the container's centre to keep the centre of gravity low. Soft
 # items go last so nothing ends up stacked on them.
 _W_LEVEL = 1e15
+_W_SLIDE = 0.0
 _W_DEPTH = 1e6
 _W_BRIDGE = 1e3
 _W_FLUSH = 1e3
@@ -52,7 +53,7 @@ _W_PRI = 1e17
 
 # Offline planning budget. The platform allows 180 s for optimize(); stay well
 # inside it and keep policy() well inside its own limit.
-_OPT_BUDGET = 100.0
+_OPT_BUDGET = 150.0
 _POLICY_BUDGET = 3.0
 
 
@@ -367,7 +368,14 @@ class Agent:
         if not pool:
             return self._fallback()
 
-        for c, info in zip(self.containers, observation.get('container_list', [])):
+        infos = observation.get('container_list', [])
+        if not self.containers and infos:
+            # The runner starts a fresh agent if optimize() overruns its budget, and
+            # it does not call get_init_states again. Rebuild from the observation,
+            # which carries the same geometry, rather than failing every action.
+            self.containers = [_Container(c) for c in infos]
+            self.has_priority = any(c.is_prioritized for c in self.containers)
+        for c, info in zip(self.containers, infos):
             c.sync(info.get('packed_items', []))
 
         # Positions are always recomputed against the live, settled state. The
@@ -516,6 +524,12 @@ class Agent:
             # centre sits at the window's midpoint, not its first cell.
             xs = np.clip(c.x0 + (ii + (gx - 1) * 0.5) * _CELL,
                          c.lo[0] + hx + _FIT, c.hi[0] - hx - _FIT)
+            # Only boxes whose centre lies in this span go in straight. Anything
+            # outside it has to be slid in sideways at its own depth, and that
+            # slide seals the whole band for every later box at the same height.
+            entry_lo = -c.length / 2.0 + c.thickness + c.cut_x + hx + _START_MARGIN
+            entry_hi = c.length / 2.0 - c.thickness - hx - _START_MARGIN
+            slide = ((xs < entry_lo - 1e-9) | (xs > entry_hi + 1e-9)).astype(float)
             ys = np.clip(c.y0 + (jj + (gy - 1) * 0.5) * _CELL,
                          c.lo[1] + hy + _FIT, c.hi[1] - hy - _FIT)
 
@@ -549,7 +563,8 @@ class Agent:
             # A priority item left in an ordinary container is penalised by the
             # platform whenever a dedicated priority container exists.
             wrong = 0.0 if (c.is_prioritized or not self._pri_pen) else self._pri_pen
-            key = (level * _W_LEVEL + depth * _W_DEPTH + bridge * _W_BRIDGE
+            key = (level * _W_LEVEL + slide * _W_SLIDE
+                   + depth * _W_DEPTH + bridge * _W_BRIDGE
                    + fdist * _W_FLUSH + np.abs(xs - xc) + wrong
                    + (_W_SOFT if soft else 0.0))
 
