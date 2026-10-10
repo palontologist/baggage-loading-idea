@@ -41,6 +41,10 @@ Helper scripts live in `simulator/scripts/`:
 - `composite.py` - **judge every change with this one.** Runs sample 000/001
   plus `robust_config.json` R1-R4 and prints the five components the platform
   actually averages, not just items placed. Takes about ten minutes for all six.
+- `why_stop.py` - **use this before proposing any change.** Attributes every
+  run's end to exactly one of the three process checks (`inclusion`,
+  `transport`, `settle`) and reports how many items survived. Cheaper than
+  `composite.py` and it points straight at the binding constraint.
 
 The score is the unweighted mean of `fill`, `cog`, `stability`, `placement`
 and `soft_item`, so a change that raises one and lowers another has to clear a
@@ -301,3 +305,29 @@ mean placed falls from 48.2% to 33.5%, with R3 56.1 -> 26.8 and R6 73.2 -> 43.9.
 Again a density gain bought by accepting marginal placements. The knob survives
 as `_W_MCF = 0` because the count is genuinely free and the idea may behave
 differently once the settle model is right.
+
+**The relaxed fallback was throwing the settle test away** (tried 2026-10-10,
+kept). `scripts/why_stop.py` settled which check ends each run: across the nine
+config suite **not one ends on the transport path** - six die on the settle
+test, two on inclusion, and only R2 (after the fix) finishes at all. Raising
+`_MIN_SUPPORT` alone did almost nothing because `_online`'s fallback calls
+`_best_move(..., relax=True)`, which skips `_stable()` entirely and then ranks
+by the normal key - which prefers low, deep, flush spots, i.e. exactly the
+bridging spots that fall.
+
+Ranked by how much of the underside is actually carried instead, and with
+`_MIN_SUPPORT` at 0.7: mean placed 53.8% -> 55.4%, mean fill 18.1 -> 19.3,
+R7 29.3% -> 46.3%, and **R2 places all 42 items with `is_placed_safe: True`**,
+which is the condition the official reference agent meets. R6 regresses
+73.2% -> 61.0% and R4 is stubbornly unchanged at 26.2%, so this is progress
+rather than a fix.
+
+For calibration, the official `README.md` gives a reference result: fill 15.31,
+cog 66.84, stability 72.07, placement 80.0, soft 100.0, `num_placed_items`
+1.0, "The packing has been completed successfully" - a mean of 66.84. Our
+fill of 29.5 is nearly double theirs, because fill is scene-dependent and the
+reference scene is sparsely filled. Their placement 80 and soft 100 show both
+components are readily attainable; they track how much you actually place.
+The `README.md` also claims the fill containment test is looser than the
+validator's, but the shipped `env.py:51` passes the validator's own
+`inclusion_margin` (-0.005) to the evaluator, so locally they are the same.
