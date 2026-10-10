@@ -34,7 +34,7 @@ _STAMP = 0.025
 
 # A box has to be held up by enough of its underside, and that support has to sit
 # under its middle, or it tips over when released.
-_MIN_SUPPORT = 0.45
+_MIN_SUPPORT = 0.7
 _CENTRE_TOL = 0.25
 
 _MAX_CAND = 16000
@@ -266,7 +266,7 @@ class _Container:
         bottom = pos[:, 2] - hz
         on_floor = bottom <= self.floor_z + 0.02
         if not self.boxes:
-            return on_floor
+            return on_floor, np.where(on_floor, 1.0, 0.0)
 
         arr = np.asarray(self.boxes, dtype=float)
         cen = np.concatenate([arr[:, 0:3], self.obstacles[:, 0:3]], axis=0)
@@ -292,16 +292,18 @@ class _Container:
         safe = np.maximum(sup, 1e-9)
         centred = ((np.abs(mx / safe - pos[:, 0]) <= _CENTRE_TOL * hx)
                    & (np.abs(my / safe - pos[:, 1]) <= _CENTRE_TOL * hy))
-        held = (sup >= _MIN_SUPPORT * (4.0 * hx * hy)) & centred
-        return on_floor | held
+        total = 4.0 * hx * hy
+        held = (sup >= _MIN_SUPPORT * total) & centred
+        frac = np.maximum(sup / np.maximum(total, 1e-9), on_floor)
+        return on_floor | held, frac
 
     def feasible(self, pos, half, relax=False):
         """Containment plus the full push-in corridor, batched over candidates."""
         ok = self.contained(pos, half)
-        if not relax:
-            ok = ok & self._stable(pos, half)
+        held, frac = self._stable(pos, half)
+        ok = ok & (held if not relax else True)
         if not ok.any():
-            return ok
+            return ok, frac
         xe, ze = self._entry(pos, half)
         hx, hy, hz = half[:, 0], half[:, 1], half[:, 2]
 
@@ -328,7 +330,7 @@ class _Container:
         blocked = self._collide(corners, margins)
         n = len(pos)
         ok &= ~blocked[:n] & ~blocked[n:2 * n] & ~blocked[2 * n:]
-        return ok
+        return ok, frac
 
 
 class Agent:
@@ -482,11 +484,15 @@ class Agent:
                 continue
             pos = np.stack([x[rows], y[rows], z[rows]], axis=1)
             half = np.array([_half_ext(item, int(orn[t])) for t in rows])
-            ok = c.feasible(pos, half, relax)
+            ok, sup = c.feasible(pos, half, relax)
             if not ok.any():
                 continue
             nfeas += int(ok.sum())
-            t = rows[int(np.argmax(ok))]
+            # On the relaxed path nothing passed _stable, so rank by how much of
+            # the underside is actually carried: that box is about to be dropped
+            # from 8cm up, and the best-supported one is least likely to fail the
+            # settle test, which ends the episode.
+            t = rows[int(np.argmax(ok * sup))] if relax else rows[int(np.argmax(ok))]
             if best is None or key[t] < best['key']:
                 best = {'container_idx': k, 'pos': (float(x[t]), float(y[t]), float(z[t])),
                         'orn': int(orn[t]), 'key': float(key[t]), 'nfeas': nfeas,
