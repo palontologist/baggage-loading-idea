@@ -38,6 +38,13 @@ Helper scripts live in `simulator/scripts/`:
 - `pack_debug.py` - offline only: what the planner does, no physics.
 - `probe.py` - dumps container planes and item statistics.
 - `stuck.py` / `mismatch.py` - explain why placements are rejected.
+- `composite.py` - **judge every change with this one.** Runs sample 000/001
+  plus `robust_config.json` R1-R4 and prints the five components the platform
+  actually averages, not just items placed. Takes about ten minutes for all six.
+
+The score is the unweighted mean of `fill`, `cog`, `stability`, `placement`
+and `soft_item`, so a change that raises one and lowers another has to clear a
+real bar. `num_placed` is reported but is *not* part of the score.
 
 ## Results (local simulator, sample_config.json)
 
@@ -156,3 +163,89 @@ judge on the whole suite. The planner's own score is over optimistic, because it
 evaluates positions against its model while `policy()` re-derives them from
 settled poses - at one point this change read as 25 -> 34 items offline and
 70.7% -> 70.7% live.
+
+**Keeping cargo off soft bags** (tried 2026-10-10, reverted). The platform's
+second-worst component is `soft_item` (~14/100 on the graded run), and soft bags
+crush under load, so preferring spots whose underside does not rest on soft
+cargo looks free. It is not. Three variants, all measured on `composite.py`:
+
+| task | none | soft only | soft + priority |
+| --- | --- | --- | --- |
+| 000 items | 68.3% | **75.6%** | 68.3% |
+| 000 softfree | **33.3%** | 0.0% | 22.2% |
+| 000 fill | 31.15 | **37.63** | 26.50 |
+| R3 items | **56.1%** | 56.1% | 26.8% |
+| R1 items | 41.5% | 41.5% | **46.3%** |
+
+"Soft only" is genuinely better on every raw axis for task 000 except the one it
+targets, and identical everywhere else, which is the most seductive result in
+this file - and it is still a loss, because the score is the mean of five
+components and it trades 33 points of `softfree` for 6.5 of fill. Adding
+priority cargo on top of that reintroduces the 30 point downside on R3.
+
+The reason it fails is structural, and the same reason means the obvious fix
+will not work either. On task 000 the planner places the first eight items,
+then finds that **no ordinary item has a feasible spot** for four consecutive
+steps, so it places four soft bags to fill gaps. Those four are what unblock the
+next nineteen ordinary items, and the ordinary items then land on top of them.
+Soft bags are load-bearing filler here: taking them out of the load path costs
+more fill than the platform awards for not crushing them.
+
+Reserving the whole column above a soft bag (not just its top face) does fix
+softfree, and was abandoned for a boring reason: it blocks so many candidates
+that `_best_move` has to re-scan far more often, and the run did not finish the
+six-config suite in 40 minutes. If softfree is ever worth another attempt, that
+is the variant to make fast - reserve by footprint against the *ordering*, not
+per candidate - but budget it as a real project, not a tweak.
+
+**Mass-aware item ordering** (tried 2026-10-10, reverted). `agent.py` had no
+reference to `mass` at all, while the centre-of-gravity component is explicitly
+mass-weighted and `scripts/score_layout.py` already reports a mass-weighted
+`cog_z`. Adding `_W_MASS * (_M_REF - mass)` to the candidate key is a safe shape:
+it is constant across one item's candidates, so it never moves the box, it only
+decides which item goes down next - heavy cargo sooner, so it lands low.
+
+The mechanism works; the price does not. The key's positional terms sit at
+`1e15` per cell of layer, `1e6` of depth and `1e3` of flush, so the weight has to
+be swept across five orders of magnitude to find the regime:
+
+| `_W_MASS` | 000 placed | 000 fill | 000 cog_z | R3 placed | R3 fill | R3 cog_z |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 (off) | 68.3% | 31.15 | 0.636 | 56.1% | 25.97 | 0.658 |
+| 1 | 68.3% | 31.15 | 0.636 | 56.1% | 25.97 | 0.658 |
+| 100 | 61.0% | 23.25 | 0.621 | 56.1% | 24.01 | 0.658 |
+| 1e13 - 1e15 | 43.9% | 23.74 | 0.635 | 39.0% | 15.61 | 0.511 |
+
+Anything above `1e3` swamps the flush and depth terms and simply sorts the whole
+task heaviest-first. That does lower the centre of gravity (R3 0.658 -> 0.511,
+001 0.582 -> 0.499) and takes `softfree` on task 000 from 33% to 100%, but it
+costs 17-25 points of items placed, and centre of gravity is one of five
+components. Mass is best used as a pure tie-break, and there it does nothing at
+all, because the existing `level` term already puts cargo at the bottom and the
+cheap way to lower a mass-weighted centroid is to fill the bottom densely.
+
+**Ground-layer items can never score fill** (found 2026-10-10, not fixable).
+Across the suite 55 placements are reported `not inside (hit boundary plane)`
+and therefore contribute zero to `fill_score` while still counting towards
+`num_placed_items`. 91% of them are on `plane0`, normal `[0,0,-1]` - the floor -
+with a median overshoot of 0.0mm:
+
+| cause | count |
+| --- | --- |
+| ground-layer graze, <=5mm | 50 |
+| sunk 5-50mm (soft bags deforming) | 4 |
+| other | 1 |
+
+The mechanism: `containers.buffer = 0.0`, so the collision surface sits exactly
+on the containment plane; the item is commanded 6mm up (`_CONTAIN`), accepted,
+spawned 8cm up (`start_z = 0.08`) and falls onto the floor; then
+`evaluator.py:19` reuses the *validator's placement* margin
+(`inclusion_margin = -0.005`) against the *settled* pose, and a resting item's
+bottom corner has `dots = 0.0`, which fails. Raising `_CONTAIN` cannot help -
+commanding higher only means a longer fall to the same resting place.
+
+This is a property of the harness, not of this agent, so it caps everyone
+equally. It does mean the effective ceiling on `fill` is roughly 45-50 rather
+than the 59-65 that item volume alone suggests, since the entire ground layer
+scores zero however well it is packed. Any estimate of what is achievable here
+has to assume that cap.

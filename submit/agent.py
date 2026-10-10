@@ -48,6 +48,8 @@ _W_SLIDE = 0.0
 _W_DEPTH = 1e6
 _W_BRIDGE = 1e3
 _W_FLUSH = 1e3
+_W_MASS = 0.0      # see AGENTS.md: mass-aware ordering measured strictly worse
+_M_REF = 10.0
 _W_SOFT = 1e18
 _W_PRI = 1e17
 
@@ -290,8 +292,6 @@ class _Container:
         centred = ((np.abs(mx / safe - pos[:, 0]) <= _CENTRE_TOL * hx)
                    & (np.abs(my / safe - pos[:, 1]) <= _CENTRE_TOL * hy))
         held = (sup >= _MIN_SUPPORT * (4.0 * hx * hy)) & centred
-        # Anything resting on a soft bag is a bad idea: soft cargo crushes under
-        # load and the platform penalises having anything stacked on it.
         return on_floor | held
 
     def feasible(self, pos, half, relax=False):
@@ -533,6 +533,16 @@ class Agent:
             ys = np.clip(c.y0 + (jj + (gy - 1) * 0.5) * _CELL,
                          c.lo[1] + hy + _FIT, c.hi[1] - hy - _FIT)
 
+            # Trim on the cheap terms before doing any per-candidate geometry.
+            # A big container can offer hundreds of thousands of spots and the
+            # flushness test below is O(slots x neighbours) memory.
+            pre = (np.round(base[jj, ii] / _CELL) * _W_LEVEL + slide * _W_SLIDE
+                   + np.round((c.hi[1] - ys) / _CELL) * _W_DEPTH)
+            if len(pre) > _MAX_CAND:
+                keep = np.argpartition(pre, _MAX_CAND)[:_MAX_CAND]
+                jj, ii, zs = jj[keep], ii[keep], zs[keep]
+                xs, ys, slide, pre = xs[keep], ys[keep], slide[keep], pre[keep]
+
             # Prefer sitting flush against a wall or a neighbour. Seeking the
             # centre on its own opens dead strips along the walls that no later
             # item is narrow enough to fill.
@@ -563,9 +573,14 @@ class Agent:
             # A priority item left in an ordinary container is penalised by the
             # platform whenever a dedicated priority container exists.
             wrong = 0.0 if (c.is_prioritized or not self._pri_pen) else self._pri_pen
+            # Mass is a constant across this item's candidates, so it never moves
+            # the box; it only decides which item goes down next. Heavier cargo
+            # is placed sooner so it lands low, which is what the centre-of-gravity
+            # and dynamic-stability components actually reward.
+            heavy = _W_MASS * (_M_REF - float(item.get('mass', _M_REF)))
             key = (level * _W_LEVEL + slide * _W_SLIDE
                    + depth * _W_DEPTH + bridge * _W_BRIDGE
-                   + fdist * _W_FLUSH + np.abs(xs - xc) + wrong
+                   + fdist * _W_FLUSH + np.abs(xs - xc) + wrong + heavy
                    + (_W_SOFT if soft else 0.0))
 
             out.append(np.stack([key, np.full(len(key), float(c.index)),
