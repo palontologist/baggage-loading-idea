@@ -297,9 +297,41 @@ class _Container:
         frac = np.maximum(sup / np.maximum(total, 1e-9), on_floor)
         return on_floor | held, frac
 
-    def feasible(self, pos, half, relax=False):
+    def _reserved(self, pos, half):
+        """True where a candidate would occupy the column above soft cargo.
+
+        The platform penalises ordinary cargo resting on a soft bag. Reserving
+        only the bag's top face is not enough - cargo set down beside it and
+        stacked on later still crushes it - so reserve the whole footprint up to
+        the ceiling and leave soft bags clear.
+
+        This is the per-candidate version of the check, but the rectangles come
+        straight out of `self.boxes`, so the work is O(candidates x soft bags),
+        the same shape as the stability test that already runs. Soft cargo is
+        recovered from the simulator's own poses, so this survives a restart.
+        """
+        if not self.boxes:
+            return np.zeros(len(pos), dtype=bool)
+        arr = np.asarray(self.boxes, dtype=float)
+        arr = arr[arr[:, 6] > 0]
+        if not len(arr):
+            return np.zeros(len(pos), dtype=bool)
+        hx, hy, hz = half[:, 0:1], half[:, 1:2], half[:, 2:3]
+        bx0, bx1 = arr[None, :, 0] - arr[None, :, 3], arr[None, :, 0] + arr[None, :, 3]
+        by0, by1 = arr[None, :, 1] - arr[None, :, 4], arr[None, :, 1] + arr[None, :, 4]
+        top = arr[None, :, 2] + arr[None, :, 5]
+        ov = (((pos[:, 0:1] - hx) < bx1 + _FIT) & ((pos[:, 0:1] + hx) > bx0 - _FIT)
+              & ((pos[:, 1:2] - hy) < by1 + _FIT) & ((pos[:, 1:2] + hy) > by0 - _FIT)
+              & ((pos[:, 2:3] - hz) >= top - 0.004))
+        return ov.any(axis=1)
+
+    def feasible(self, pos, half, relax=False, soft=False):
         """Containment plus the full push-in corridor, batched over candidates."""
         ok = self.contained(pos, half)
+        # Soft on soft is explicitly not penalised, so only ordinary cargo has
+        # to stay out of the column above a soft bag.
+        if not soft:
+            ok = ok & ~self._reserved(pos, half)
         held, frac = self._stable(pos, half)
         ok = ok & (held if not relax else True)
         if not ok.any():
@@ -492,7 +524,7 @@ class Agent:
                 continue
             pos = np.stack([x[rows], y[rows], z[rows]], axis=1)
             half = np.array([_half_ext(item, int(orn[t])) for t in rows])
-            ok, sup = c.feasible(pos, half, relax)
+            ok, sup = c.feasible(pos, half, relax, soft)
             if not ok.any():
                 continue
             nfeas += int(ok.sum())
