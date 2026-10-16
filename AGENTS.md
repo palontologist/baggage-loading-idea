@@ -195,33 +195,12 @@ next nineteen ordinary items, and the ordinary items then land on top of them.
 Soft bags are load-bearing filler here: taking them out of the load path costs
 more fill than the platform awards for not crushing them.
 
-Reserving the whole column above a soft bag - nothing whose footprint overlaps
-a soft bag's footprint - **does fix softfree, and the old runtime objection is
-now gone.** The first attempt did the shadow test per candidate and could not
-finish six configs in 40 minutes. `_Container._reserved` instead keeps each soft
-bag's footprint as a rectangle taken straight out of `self.boxes` (so it is
-recovered from the simulator's own poses and survives a restart) and tests
-overlap at `O(candidates x soft bags)` - the same shape as the stability test
-that already runs. Three configs now take 5m22s.
-
-This is the only change in this file that gains on several components at once,
-and it is the best result measured so far:
-
-| | 000 placed | 000 fill | 000 softfree | 000 placement | 000 cog_z |
-| --- | --- | --- | --- | --- | --- |
-| top face only | 73.2% | 30.03 | 12.5% | 25.0% | 0.601 |
-| whole column | 51.2% | 11.75 | **100.0%** | **100.0%** | **0.447** |
-
-Across the nine-config suite the mean moves by placed -3.2, fill -2.4,
-softfree **+28.2**, placement **+13.9**, cog_z -0.032. Six of nine scenes reach
-100% on both softfree and placement, which are the values the official
-reference agent reports. Only task 000 pays heavily (22 points of placed, 18 of
-fill) and R3's placement slips 50% -> 33%.
-
-The cost is concentrated in fill, so this only pays if the platform weights
-softfree and placement at least comparably to fill. Since the score is a
-weighted average we have never been able to read, that is the one assumption
-this rests on.
+Reserving the whole column above a soft bag (not just its top face) does fix
+softfree, and was abandoned for a boring reason: it blocks so many candidates
+that `_best_move` has to re-scan far more often, and the run did not finish the
+six-config suite in 40 minutes. If softfree is ever worth another attempt, that
+is the variant to make fast - reserve by footprint against the *ordering*, not
+per candidate - but budget it as a real project, not a tweak.
 
 **Mass-aware item ordering** (tried 2026-10-10, reverted). `agent.py` had no
 reference to `mass` at all, while the centre-of-gravity component is explicitly
