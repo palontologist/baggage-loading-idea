@@ -195,12 +195,36 @@ next nineteen ordinary items, and the ordinary items then land on top of them.
 Soft bags are load-bearing filler here: taking them out of the load path costs
 more fill than the platform awards for not crushing them.
 
-Reserving the whole column above a soft bag (not just its top face) does fix
-softfree, and was abandoned for a boring reason: it blocks so many candidates
-that `_best_move` has to re-scan far more often, and the run did not finish the
-six-config suite in 40 minutes. If softfree is ever worth another attempt, that
-is the variant to make fast - reserve by footprint against the *ordering*, not
-per candidate - but budget it as a real project, not a tweak.
+Reserving the whole column above a soft bag - nothing whose footprint overlaps
+a soft bag's footprint - **fixes the local `soft_free_pct` metric, and on the
+platform it is a clear loss. Do not repeat it.** Measured there:
+
+| | fill | cog | stability | placement | soft | placed |
+| --- | --- | --- | --- | --- | --- | --- |
+| settle fix | 27.54 | 53.22 | 48.32 | 27.05 | **18.15** | 0.478 |
+| + column reserved | 26.73 | 38.77 | 37.19 | 18.40 | **16.30** | 0.462 |
+
+Every component got worse, and `soft` and `placement` got worse *despite* the
+reservation existing to make them perfect. Reverted in `939511e`.
+
+The reason is a metric bug in `scripts/score_layout.py`, and it is the most
+useful thing in this section. `soft_free_pct` and `placement_pct` are fractions
+**over the items that were actually placed**. Locally the reservation reached
+100% on six of nine scenes, because every soft bag we placed really was
+uncovered - but it also placed *fewer* soft bags, and the platform scores both
+components over all items in the scene, not over the ones we managed to load.
+So "100% of the few soft bags we placed are fine" reads as 100 locally and as
+16.30 on the platform.
+
+The general rule: **a local percentage over placed items does not predict a
+platform score over the scene.** `num_placed_items` is what actually drives all
+four non-fill components, and any change that trades items placed for a better
+*ratio* is trading against the real objective. This is the same trap as every
+other entry in this section, and it is why nine changes in a row all lost.
+
+The per-candidate `_reserved` implementation was also genuinely fast (three
+configs in 5m22s, against 40 minutes for the first attempt), so the runtime
+objection in the original write-up is retired - the idea is simply wrong.
 
 **Mass-aware item ordering** (tried 2026-10-10, reverted). `agent.py` had no
 reference to `mass` at all, while the centre-of-gravity component is explicitly
