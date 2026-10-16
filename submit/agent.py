@@ -431,11 +431,19 @@ class Agent:
         deadline = time.time() + _OPT_BUDGET
         while remaining:
             best = None
+            expired = False
             for item in remaining:
                 move = self._best_move(item)
                 if move is not None and (best is None or self._rank(move) < self._rank(best[1])):
                     best = (item, move)
-            if best is None or time.time() > deadline:
+                if time.time() > deadline:
+                    # Per-item, not per-scan. A scan of every remaining item costs
+                    # about a second each, so testing the deadline only at the end
+                    # of the loop lets the overshoot grow without bound and risks
+                    # the platform's 180s limit on a slower machine.
+                    expired = True
+                    break
+            if best is None or expired:
                 break
             item, move = best
             self._commit(move)
